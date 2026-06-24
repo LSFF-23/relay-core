@@ -11,6 +11,7 @@ work/
 *.vcd
 transcript
 *.vstf
+wlft*
 
 # quartus files
 db/
@@ -22,6 +23,7 @@ simulation/
 *.bak
 *.qws
 *.txt
+greybox_tmp/
 
 # document files
 *.pdf
