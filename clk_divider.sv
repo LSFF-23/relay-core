@@ -1,23 +1,28 @@
-module clk_divider (
+module clk_divider 
+import relay_pkg::*;
+#(
+    parameter int LIMIT = DIVIDER_FACTOR
+)
+(
     clk,
     rstn,
     sample_en
 );
 
-import relay_pkg::*;
+localparam LIMIT_SIZE = $clog2(LIMIT);
 
 input logic clk;
 input logic rstn;
 output logic sample_en;
 
-logic [DIVIDER_SIZE-1:0] counter;
+logic [LIMIT_SIZE-1:0] counter;
 
 always_ff @(posedge clk)
     if (!rstn) begin
         sample_en <= '0;
         counter <= '0;
     end else
-        if (counter == DIVIDER_FACTOR - 1) begin
+        if (counter == LIMIT - 1) begin
             sample_en <= 1'b1;
             counter <= '0;
         end else begin
