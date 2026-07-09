@@ -23,6 +23,7 @@ altera_mf.v
 *.bak
 *.qws
 *.txt
+*.rpt
 
 # unwanted tb_ files
 tb_*.sv
