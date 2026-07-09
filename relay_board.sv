@@ -153,7 +153,7 @@ import relay_pkg::*;
 input logic clk;
 input logic rst_n;
 input logic is_signed;
-input logic [10:0] value;
+input logic [11:0] value;
 output logic [6:0] digit1;
 output logic [6:0] digit2;
 output logic [6:0] digit3;
@@ -169,12 +169,11 @@ clk_divider #(.LIMIT(DEBOUNCER_LIMIT)) u_clk_divider (
     .sample_en(sample_en)
 );
 
-wire [11:0] u_value = is_signed ? (12'(~value) + 1'b1) : 12'(value);
 double_dabbler u_double_dabbler (
     .clk(clk),
     .rst_n(rst_n),
     .sample_en(sample_en),
-    .in(u_value),
+    .in(value),
     .out(bcd),
     .valid(dd_valid)
 );
@@ -230,8 +229,10 @@ module relay_board (
     digit4
 );
 
-
 import relay_pkg::*;
+
+localparam int A59L_SCALER = int'(A59_INTERVAL / 0.1);
+localparam int A59L_STEP = int'(SAMPLING_F * 0.1);
 
 input logic clk;
 input logic reset_n; // btn
@@ -268,7 +269,8 @@ logic [ACC_DW-1:0] a59_hysteresis;
 logic [15:0] a59_limit;
 logic a59_trip;
 
-logic [10:0] display_v;
+logic [11:0] display_v;
+logic [7:0] limit_scaler;
 
 debouncer u_debouncer_clear (
     .clk(clk),
@@ -319,7 +321,6 @@ ansi59 u_ansi59 (
     .trip(a59_trip)
 );
 
-// wire [10:0] display_v = signed'(11'(adc_reg));
 wire is_signed = (sel_reg == 2'b01) ? adc_reg[ADC_DW-1] : 1'b0;
 display u_display (
     .clk(clk),
@@ -406,25 +407,33 @@ always_ff @(posedge clk)
     if (!rst_n) begin
         a59_pickup <= ACC_DW'(A59_PICKUP);
         a59_hysteresis <= ACC_DW'(A59_HYSTERESIS);
-        a59_limit <= 16'(10);
+        a59_limit <= 16'(A59_TIMEOUT);
+        limit_scaler <= 8'(A59L_SCALER);
         display_v <= '0;
     end else begin
         case (sel_reg)
             2'b00: begin
-                display_v <= 11'(sdft_out >> (INDEX_SIZE - 1));
+                display_v <= 12'(sdft_out >> (INDEX_SIZE - 1));
             end
             2'b01: begin
-                display_v <= signed'(11'(adc_reg));
+                display_v <= 12'(limit_scaler);
+                if (inc_falling && limit_scaler < 'd999) begin
+                    limit_scaler <= limit_scaler + 1'b1;
+                    a59_limit <= a59_limit + 16'(A59L_STEP);
+                end else if (dec_falling && limit_scaler > '0) begin
+                    limit_scaler <= limit_scaler - 1'b1;
+                    a59_limit <= a59_limit - 16'(A59L_STEP);
+                end
             end
             2'b10: begin
-                display_v <= 11'(pickup_amp);
+                display_v <= 12'(pickup_amp);
                 if (inc_falling && pickup_amp < 'd999)
                     a59_pickup <= a59_pickup + ACC_DW'(32);
                 else if (dec_falling && pickup_amp > '0)
                     a59_pickup <= a59_pickup - ACC_DW'(32);
             end
             2'b11: begin
-                display_v <= 11'(hyst_amp);
+                display_v <= 12'(hyst_amp);
                 if (inc_falling && hyst_amp < 'd999)
                     a59_hysteresis <= a59_hysteresis + ACC_DW'(32);
                 else if (dec_falling && hyst_amp > '0)
