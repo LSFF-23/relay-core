@@ -107,6 +107,7 @@ always_ff @(posedge clk)
         im2 <= '0;
         out <= '0;
         valid <= 0;
+        for (int i = 0; i < BUFFER_SIZE; i++) buffer[i] = '0;
     end else begin
         case (state)
             SDFT_IDLE: begin
