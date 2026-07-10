@@ -140,24 +140,22 @@ endmodule
 module display (
     clk,
     rst_n,
-    is_signed,
     value,
+    digit0,
     digit1,
     digit2,
-    digit3,
-    digit4
+    digit3
 );
 
 import relay_pkg::*;
 
 input logic clk;
 input logic rst_n;
-input logic is_signed;
 input logic [11:0] value;
+output logic [6:0] digit0;
 output logic [6:0] digit1;
 output logic [6:0] digit2;
 output logic [6:0] digit3;
-output logic [6:0] digit4;
 
 logic sample_en;
 logic [15:0] bcd;
@@ -183,7 +181,7 @@ decoder7 u_decoder7_d1 (
     .rst_n(rst_n),
     .sample_en(dd_valid),
     .bcd(bcd[3:0]),
-    .segments(digit1)
+    .segments(digit0)
 );
 
 decoder7 u_decoder7_d2 (
@@ -191,7 +189,7 @@ decoder7 u_decoder7_d2 (
     .rst_n(rst_n),
     .sample_en(dd_valid),
     .bcd(bcd[7:4]),
-    .segments(digit2)
+    .segments(digit1)
 );
 
 decoder7 u_decoder7_d3 (
@@ -199,7 +197,7 @@ decoder7 u_decoder7_d3 (
     .rst_n(rst_n),
     .sample_en(dd_valid),
     .bcd(bcd[11:8]),
-    .segments(digit3)
+    .segments(digit2)
 );
 
 decoder7 u_decoder7_d4 (
@@ -207,7 +205,7 @@ decoder7 u_decoder7_d4 (
     .rst_n(rst_n),
     .sample_en(dd_valid),
     .bcd(bcd[15:12]),
-    .segments(digit4)
+    .segments(digit3)
 );
 
 endmodule
@@ -216,17 +214,19 @@ endmodule
 module relay_board (
     clk,
     reset_n,
-    a59_fault,
     clear_fault,
     display_sel,
     display_inc,
     display_dec,
     trip_led,
-    sign,
+    digit0,
     digit1,
     digit2,
     digit3,
-    digit4
+    adc_convst,
+    adc_dout,
+    adc_din,
+    adc_sclk
 );
 
 import relay_pkg::*;
@@ -236,33 +236,29 @@ localparam int A59L_STEP = int'(SAMPLING_F * 0.1);
 
 input logic clk;
 input logic reset_n; // btn
-input logic a59_fault; // sw
 input logic clear_fault; // btn
 input logic [1:0] display_sel; // sw
 input logic display_inc; // btn
 input logic display_dec; // btn
 output logic trip_led;
-output logic sign; // seg = 6
 // 7 segments = sign d4 d3 d2 d1
+output logic [6:0] digit0;
 output logic [6:0] digit1;
 output logic [6:0] digit2;
-output logic [6:0] digit3;
-output logic [6:0] digit4; 
+output logic [6:0] digit3; 
+// adc interface (pg. 43, de10 manual)
+output logic adc_convst;
+input  logic adc_dout;
+output logic adc_din;
+output logic adc_sclk;
 
 logic btn_inc, btn_dec, clear_led;
 logic inc_reg, dec_reg;
-logic p59_sync, p59_fault;
 logic [1:0] sel_sync, sel_reg;
-
-logic signed [ADC_DW-1:0] SIN_TABLE [BUFFER_SIZE];
-initial $readmemh(SIN_PATH, SIN_TABLE);
 
 logic rst_sync, rst_n;
 logic sample_en;
 logic [INDEX_SIZE-1:0] index;
-logic [2:0] adc_sync;
-logic signed [ADC_DW-1:0] amplitude, sin_reg, adc_reg;
-logic signed [2*ADC_DW-1:0] const_reg, wave_reg;
 
 logic [ACC_DW-1:0] a59_pickup;
 logic [ACC_DW-1:0] a59_hysteresis;
@@ -299,13 +295,40 @@ clk_divider u_clk_divider (
     .sample_en(sample_en)
 );
 
+/*
+default altera module is generating a latch
+use grep or search for "counter <=" in "altera_up_avalon_adv_adc.v"
+on "if (reset)", set "counter <= 8'b0;", there are two instances of this
+delete db/incremental_db folder in quartus project
+replace global module (can be accessed directly from ip catalog)
+generate module again using adc_controler.qsys
+*/
+wire adc_rst = ~rst_n;
+wire [11:0] adc_ch0;
+adc_controller u_adc_controller (
+    .CLOCK(clk),
+    .RESET(adc_rst),
+    .CH0(adc_ch0),
+    .CH1(),
+    .CH2(),
+    .CH3(),
+    .CH4(),
+    .CH5(),
+    .CH6(),
+    .CH7(),
+    .ADC_CS_N(adc_convst),
+    .ADC_DOUT(adc_dout),
+    .ADC_DIN (adc_din),
+    .ADC_SCLK(adc_sclk)
+);
+
 wire [ACC_DW-1:0] sdft_out;
 wire sdft_valid;
 sdft u_sdft (
     .clk(clk),
     .rstn(rst_n),
-    .sample_en(adc_sync[2]),
-    .sample(adc_reg),
+    .sample_en(sample_en),
+    .sample(ADC_DW'(adc_ch0)),
     .out(sdft_out),
     .valid(sdft_valid)
 );
@@ -321,16 +344,14 @@ ansi59 u_ansi59 (
     .trip(a59_trip)
 );
 
-wire is_signed = (sel_reg == 2'b01) ? adc_reg[ADC_DW-1] : 1'b0;
 display u_display (
     .clk(clk),
     .rst_n(rst_n),
-    .is_signed(is_signed),
     .value(display_v),
+    .digit0(digit0),
     .digit1(digit1),
     .digit2(digit2),
-    .digit3(digit3),
-    .digit4(digit4)
+    .digit3(digit3)
 );
 
 always_ff @(posedge clk, negedge reset_n) begin
@@ -356,49 +377,11 @@ always_ff @(posedge clk)
 
 always_ff @(posedge clk)
     if (!rst_n) begin
-        p59_sync <= '0;
-        p59_fault <= '0;
         sel_sync <= '0;
         sel_reg <= '0;
     end else begin
-        p59_sync <= a59_fault;
-        p59_fault <= p59_sync;
-
         sel_sync <= display_sel;
         sel_reg <= sel_sync;
-    end
-
-always_ff @(posedge clk) 
-    if (!rst_n) 
-        amplitude <= '0;
-    else if (p59_fault)
-        amplitude <= ADC_DW'(622);
-    else
-        amplitude <= ADC_DW'(311);
-
-always_ff @(posedge clk)
-    if (!rst_n)
-        adc_sync <= '0;
-    else
-        adc_sync <= {adc_sync[1:0], sample_en};
-
-wire signed [2*ADC_DW-1:0] round_const = (2*ADC_DW)'(1 << 14); // sin = S1.15
-wire signed [2*ADC_DW-1:0] wave_n = amplitude * sin_reg;
-always_ff @(posedge clk)
-    if (!rst_n) begin
-        index <= '0;
-        sin_reg <= '0;
-        adc_reg <= '0;
-        const_reg <= '0;
-        wave_reg <= '0;
-    end else if (sample_en) begin
-        sin_reg <= SIN_TABLE[index];
-        index <= (index == INDEX_SIZE'(BUFFER_SIZE - 1)) ? '0 : index + 1'b1;
-        const_reg <= round_const;
-    end else if (adc_sync[0]) begin
-        wave_reg <= wave_n + const_reg;
-    end else if (adc_sync[1]) begin
-        adc_reg <= ADC_DW'($signed(wave_reg >>> 15));
     end
 
 wire [ACC_DW-1:0] pickup_amp = a59_pickup >> (INDEX_SIZE - 1);
@@ -451,7 +434,5 @@ always_ff @(posedge clk)
         trip_led <= 1'b1;
     else if (clear_trigger)
         trip_led <= 1'b0;
-
-assign sign = !is_signed;
 
 endmodule
