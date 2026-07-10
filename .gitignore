@@ -12,6 +12,7 @@ work/
 *.vstf
 
 # quartus files
+.qsys_edit/
 db/
 greybox_tmp/
 incremental_db/
@@ -24,6 +25,8 @@ altera_mf.v
 *.qws
 *.txt
 *.rpt
+*.debuginfo
+*.sopcinfo
 
 # unwanted tb_ files
 tb_*.sv
@@ -31,3 +34,4 @@ tb_*.v
 
 # other
 .vscode/
+adc_controller/
