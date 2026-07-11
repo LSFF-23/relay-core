@@ -1,7 +1,7 @@
 // ansi 59 - overvoltage relay
 module ansi59 (
     clk,
-    rstn,
+    rst_n,
     sample_en,
     v_in,
     v_pickup,
@@ -13,7 +13,7 @@ module ansi59 (
 import relay_pkg::*;
 
 input logic clk;
-input logic rstn;
+input logic rst_n;
 input logic sample_en;
 input logic [ACC_DW-1:0] v_in;
 input logic [ACC_DW-1:0] v_pickup;
@@ -24,24 +24,24 @@ output logic trip;
 logic [15:0] pickup_counter;
 logic pickup;
 
-wire [ACC_DW-1:0] upper_sum = v_pickup + hysteresis;
-wire [ACC_DW-1:0] lower_sum = v_pickup - hysteresis;
+wire [ACC_DW-1:0] upper_limit = v_pickup + hysteresis;
+wire [ACC_DW-1:0] lower_limit = v_pickup;
 
-wire above_limit = v_in > upper_sum;
-wire below_limit = v_in < lower_sum;
+wire above_upper = v_in > upper_limit;
+wire above_lower = v_in > lower_limit;
 wire counter_limit = pickup_counter >= sample_limit;
 
 always_ff @(posedge clk)
-    if (!rstn) begin
+    if (!rst_n) begin
         pickup_counter <= '0;
         pickup <= '0;
     end else if (sample_en) begin
-        if (above_limit) begin
-            if (!counter_limit) pickup_counter <= pickup_counter + 1'b1;
-            pickup <= 1'b1;
-        end else if (below_limit) begin
-            pickup_counter <= '0;
+        if (above_lower) begin
+            if (above_upper) pickup <= 1'b1;
+            if (!counter_limit && (pickup || above_upper)) pickup_counter <= pickup_counter + 1'b1;
+        end else begin
             pickup <= 1'b0;
+            pickup_counter <= '0;
         end
     end
 
