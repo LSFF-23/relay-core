@@ -233,11 +233,13 @@ import relay_pkg::*;
 
 localparam int A59L_SCALER = int'(A59_INTERVAL / 0.1);
 localparam int A59L_STEP = int'(SAMPLING_F * 0.1);
+localparam int A27L_SCALER = int'(A27_INTERVAL / 0.1);
+localparam int A27L_STEP = int'(SAMPLING_F * 0.1);
 
 input logic clk;
 input logic reset_n; // btn
 input logic clear_fault; // btn
-input logic [1:0] display_sel; // sw
+input logic [2:0] display_sel; // sw
 input logic display_inc; // btn
 input logic display_dec; // btn
 output logic trip_led;
@@ -260,13 +262,13 @@ logic rst_sync, rst_n;
 logic sample_en;
 logic [INDEX_SIZE-1:0] index;
 
-logic [ACC_DW-1:0] a59_pickup;
-logic [ACC_DW-1:0] a59_hysteresis;
-logic [15:0] a59_limit;
-logic a59_trip;
+logic [ACC_DW-1:0] a59_pickup, a27_threshold;
+logic [ACC_DW-1:0] a59_hysteresis, a27_hysteresis;
+logic [15:0] a59_limit, a27_limit;
+logic a59_trip, a27_trip;
 
 logic [11:0] display_v;
-logic [7:0] limit_scaler;
+logic [7:0] a59_timer, a27_timer;
 
 debouncer u_debouncer_clear (
     .clk(clk),
@@ -333,9 +335,20 @@ sdft u_sdft (
     .valid(sdft_valid)
 );
 
+ansi27 u_ansi27 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .sample_en(sdft_valid),
+    .v_in(sdft_out),
+    .v_threshold(a27_threshold),
+    .hysteresis(a27_hysteresis),
+    .sample_limit(a27_limit),
+    .trip(a27_trip)
+);
+
 ansi59 u_ansi59 (
     .clk(clk),
-    .rstn(rst_n),
+    .rst_n(rst_n),
     .sample_en(sdft_valid),
     .v_in(sdft_out),
     .v_pickup(a59_pickup),
@@ -384,48 +397,78 @@ always_ff @(posedge clk)
         sel_reg <= sel_sync;
     end
 
-wire [ACC_DW-1:0] pickup_amp = a59_pickup >> (INDEX_SIZE - 1);
-wire [ACC_DW-1:0] hyst_amp = a59_hysteresis >> (INDEX_SIZE - 1);
+wire [ACC_DW-1:0] a59_amp = a59_pickup >> (INDEX_SIZE - 1);
+wire [ACC_DW-1:0] a59_hyst = a59_hysteresis >> (INDEX_SIZE - 1);
+wire [ACC_DW-1:0] a27_amp = a27_threshold >> (INDEX_SIZE - 1);
+wire [ACC_DW-1:0] a27_hyst = a27_hysteresis >> (INDEX_SIZE - 1);
 always_ff @(posedge clk)
     if (!rst_n) begin
         a59_pickup <= ACC_DW'(A59_PICKUP);
         a59_hysteresis <= ACC_DW'(A59_HYSTERESIS);
         a59_limit <= 16'(A59_TIMEOUT);
-        limit_scaler <= 8'(A59L_SCALER);
+        a59_timer <= 8'(A59L_SCALER);
+        a27_threshold <= ACC_DW'(A27_THRESHOLD);
+        a27_hysteresis <= ACC_DW'(A27_HYSTERESIS);
+        a27_limit <= 16'(A27_TIMEOUT);
+        a27_timer <= 8'(A27L_SCALER);
         display_v <= '0;
     end else begin
         case (sel_reg)
-            2'b00: begin
+            3'b000, 3'b100: begin
                 display_v <= 12'(sdft_out >> (INDEX_SIZE - 1));
             end
-            2'b01: begin
-                display_v <= 12'(limit_scaler);
-                if (inc_falling && limit_scaler < 'd999) begin
-                    limit_scaler <= limit_scaler + 1'b1;
+            3'b001: begin
+                display_v <= 12'(a59_timer);
+                if (inc_falling && a59_timer < 'd999) begin
+                    a59_timer <= a59_timer + 1'b1;
                     a59_limit <= a59_limit + 16'(A59L_STEP);
-                end else if (dec_falling && limit_scaler > '0) begin
-                    limit_scaler <= limit_scaler - 1'b1;
+                end else if (dec_falling && a59_timer > '0) begin
+                    a59_timer <= a59_timer - 1'b1;
                     a59_limit <= a59_limit - 16'(A59L_STEP);
                 end
             end
-            2'b10: begin
-                display_v <= 12'(pickup_amp);
-                if (inc_falling && pickup_amp < 'd999)
+            3'b010: begin
+                display_v <= 12'(a59_amp);
+                if (inc_falling && a59_amp < 'd999)
                     a59_pickup <= a59_pickup + ACC_DW'(32);
-                else if (dec_falling && pickup_amp > '0)
+                else if (dec_falling && a59_amp > '0)
                     a59_pickup <= a59_pickup - ACC_DW'(32);
             end
-            2'b11: begin
-                display_v <= 12'(hyst_amp);
-                if (inc_falling && hyst_amp < 'd999)
+            3'b011: begin
+                display_v <= 12'(a59_hyst);
+                if (inc_falling && a59_hyst < 'd999)
                     a59_hysteresis <= a59_hysteresis + ACC_DW'(32);
-                else if (dec_falling && hyst_amp > '0)
+                else if (dec_falling && a59_hyst > '0)
                     a59_hysteresis <= a59_hysteresis - ACC_DW'(32);
+            end
+            3'b101: begin
+                display_v <= 12'(a27_timer);
+                if (inc_falling && a27_timer < 'd999) begin
+                    a27_timer <= a27_timer + 1'b1;
+                    a27_limit <= a27_limit + 16'(A27L_STEP);
+                end else if (dec_falling && a27_timer > '0) begin
+                    a27_timer <= a27_timer - 1'b1;
+                    a27_limit <= a27_limit - 16'(A27L_STEP);
+                end
+            end
+            3'b110: begin
+                display_v <= 12'(a27_amp);
+                if (inc_falling && a27_amp < 'd999)
+                    a27_threshold <= a27_threshold + ACC_DW'(32);
+                else if (dec_falling && a27_amp > '0)
+                    a27_threshold <= a27_threshold - ACC_DW'(32);
+            end
+            3'b111: begin
+                display_v <= 12'(a27_hyst);
+                if (inc_falling && a27_hyst < 'd999)
+                    a27_hysteresis <= a27_hysteresis + ACC_DW'(32);
+                else if (dec_falling && a27_hyst > '0)
+                    a27_hysteresis <= a27_hysteresis - ACC_DW'(32);
             end
         endcase
     end
 
-wire trip_trigger = a59_trip;
+wire trip_trigger = a27_trip | a59_trip;
 wire clear_trigger = !clear_led;
 always_ff @(posedge clk)
     if (!rst_n)
