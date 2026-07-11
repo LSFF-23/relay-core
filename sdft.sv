@@ -33,7 +33,18 @@ logic signed [ADC_DW:0] delta_reg;
 logic signed [ACC_DW-1:0] re_acc, im_acc;
 logic signed [ACC_DW+ADC_DW-1:0] re_cos, im_sin, reshift_reg, imshift_reg;
 logic signed [MAG_DW-1:0] re2, im2;
-msdft_states state, next_state;
+
+enum logic [3:0] {
+    SDFT_IDLE,
+    SDFT_DELTA,
+    SDFT_TRIG,
+    SDFT_SHIFT,
+    SDFT_UPDATE,
+    SDFT_SQUARE,
+    SDFT_SQRT,
+    SDFT_MAGNITUDE,
+    SDFT_DONE
+} state, next_state;
 
 wire sqrt_en = state == SDFT_SQRT;
 wire signed [MAG_DW-1:0] mag2 = re2 + im2;
