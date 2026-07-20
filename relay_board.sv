@@ -216,8 +216,11 @@ module relay_board (
     reset_n,
     clear_fault,
     display_sel,
+    filter_sel,
+    method_sel,
     display_inc,
     display_dec,
+    relay_led,
     trip_led,
     digit0,
     digit1,
@@ -240,8 +243,11 @@ input logic clk;
 input logic reset_n; // btn
 input logic clear_fault; // btn
 input logic [2:0] display_sel; // sw
+input logic filter_sel; //sw
+input logic [1:0] method_sel; // sw
 input logic display_inc; // btn
 input logic display_dec; // btn
+output logic [1:0] relay_led;
 output logic trip_led;
 // 7 segments = sign d4 d3 d2 d1
 output logic [6:0] digit0;
@@ -256,7 +262,9 @@ output logic adc_sclk;
 
 logic btn_inc, btn_dec, clear_led;
 logic inc_reg, dec_reg;
-logic [1:0] sel_sync, sel_reg;
+logic [2:0] sel_sync, sel_reg;
+logic filter_sync, filter_reg;
+logic [1:0] method_sync, method_reg;
 
 logic rst_sync, rst_n;
 logic sample_en;
@@ -269,6 +277,15 @@ logic a59_trip, a27_trip;
 
 logic [11:0] display_v;
 logic [7:0] a59_timer, a27_timer;
+
+logic [11:0] adc_ch0;
+logic [ADC_DW-1:0] adc_cic;
+logic cic_en;
+logic [ACC_DW-1:0] sdft_out, rms_out, peak_out;
+logic sdft_valid, rms_valid, peak_valid;
+
+logic [ACC_DW-1:0] protection_in;
+logic protection_valid;
 
 debouncer u_debouncer_clear (
     .clk(clk),
@@ -306,7 +323,6 @@ replace global module (can be accessed directly from ip catalog)
 generate module again using adc_controler.qsys
 */
 wire adc_rst = ~rst_n;
-wire [11:0] adc_ch0;
 adc_controller u_adc_controller (
     .CLOCK(clk),
     .RESET(adc_rst),
@@ -324,22 +340,59 @@ adc_controller u_adc_controller (
     .ADC_SCLK(adc_sclk)
 );
 
-wire [ACC_DW-1:0] sdft_out;
-wire sdft_valid;
+cic_filter #(
+    .IN_DW(12),
+    .OUT_DW(16),
+    .N(4),
+    .R(130),
+    .M(1)
+) u_cic_filter (
+    .clk(clk),
+    .reset_n(rst_n),
+    .in_data(adc_ch0),
+    .in_valid(1'b1),
+    .in_ready(),
+    .in_error('0),
+    .out_data(adc_cic),
+    .out_valid(cic_en), // 3846 Hz
+    .out_ready(1'b1),
+    .out_error()
+);
+
+wire [ADC_DW-1:0] sample_in = (filter_reg) ? adc_cic : ADC_DW'(adc_ch0);
+wire sample_valid = (filter_reg) ? cic_en : sample_en;
 sdft u_sdft (
     .clk(clk),
     .rstn(rst_n),
-    .sample_en(sample_en),
-    .sample(ADC_DW'(adc_ch0)),
+    .sample_en(sample_valid),
+    .sample(sample_in),
     .out(sdft_out),
     .valid(sdft_valid)
+);
+ 
+rms u_rms (
+    .clk(clk),
+    .rst_n(rst_n),
+    .sample_en(sample_valid),
+    .sample(sample_in),
+    .out(rms_out),
+    .valid(rms_valid)
+);
+
+peak_detector u_peak_detector (
+    .clk(clk),
+    .rst_n(rst_n),
+    .sample_en(sample_valid),
+    .sample(sample_in),
+    .out(peak_out),
+    .valid(peak_valid)
 );
 
 ansi27 u_ansi27 (
     .clk(clk),
     .rst_n(rst_n),
-    .sample_en(sdft_valid),
-    .v_in(sdft_out),
+    .sample_en(protection_valid),
+    .v_in(protection_in),
     .v_threshold(a27_threshold),
     .hysteresis(a27_hysteresis),
     .sample_limit(a27_limit),
@@ -349,8 +402,8 @@ ansi27 u_ansi27 (
 ansi59 u_ansi59 (
     .clk(clk),
     .rst_n(rst_n),
-    .sample_en(sdft_valid),
-    .v_in(sdft_out),
+    .sample_en(protection_valid),
+    .v_in(protection_in),
     .v_pickup(a59_pickup),
     .hysteresis(a59_hysteresis),
     .sample_limit(a59_limit),
@@ -366,6 +419,23 @@ display u_display (
     .digit2(digit2),
     .digit3(digit3)
 );
+
+always_comb begin
+    case (method_reg)
+        2'b01: begin
+            protection_in = rms_out;
+            protection_valid = rms_valid;
+        end
+        2'b10: begin
+            protection_in = peak_out;
+            protection_valid = peak_valid;
+        end
+        default: begin
+            protection_in = sdft_out;
+            protection_valid = sdft_valid;
+        end
+    endcase
+end
 
 always_ff @(posedge clk, negedge reset_n) begin
     if (!reset_n) begin
@@ -392,9 +462,21 @@ always_ff @(posedge clk)
     if (!rst_n) begin
         sel_sync <= '0;
         sel_reg <= '0;
+
+        filter_sync <= '0;
+        filter_reg <= '0;
+
+        method_sync <= '0;
+        method_reg <= '0;
     end else begin
         sel_sync <= display_sel;
         sel_reg <= sel_sync;
+
+        filter_sync <= filter_sel;
+        filter_reg <= filter_sync;
+
+        method_sync <= method_sel;
+        method_reg <= method_sync;
     end
 
 wire [ACC_DW-1:0] a59_amp = a59_pickup >> (INDEX_SIZE - 1);
@@ -414,8 +496,8 @@ always_ff @(posedge clk)
         display_v <= '0;
     end else begin
         case (sel_reg)
-            3'b000, 3'b100: begin
-                display_v <= 12'(sdft_out >> (INDEX_SIZE - 1));
+            3'b000: begin
+                display_v <= 12'(protection_in >> (INDEX_SIZE - 1));
             end
             3'b001: begin
                 display_v <= 12'(a59_timer);
@@ -440,6 +522,9 @@ always_ff @(posedge clk)
                     a59_hysteresis <= a59_hysteresis + ACC_DW'(32);
                 else if (dec_falling && a59_hyst > '0)
                     a59_hysteresis <= a59_hysteresis - ACC_DW'(32);
+            end
+            3'b100: begin
+                display_v <= 12'(adc_ch0);
             end
             3'b101: begin
                 display_v <= 12'(a27_timer);
@@ -477,5 +562,11 @@ always_ff @(posedge clk)
         trip_led <= 1'b1;
     else if (clear_trigger)
         trip_led <= 1'b0;
+
+always_ff @(posedge clk)
+    if (!rst_n)
+        relay_led <= '0;
+    else
+        relay_led <= {a27_trip, a59_trip};
 
 endmodule
